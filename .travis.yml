@@ -1,2 +1,6 @@
-language: haskell
-ghc: 8.0.1
+env:
+# - GHCVER=7.10.3
+ - GHCVER=8.0.1
+
+script:
+ - wget https://raw.github.com/ndmitchell/neil/master/travis.sh -O - --no-check-certificate --quiet | sh
