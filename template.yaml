@@ -1,0 +1,22 @@
+rapsearch:
+  rapsearchDB: /fakepath/
+pricefilter:
+  highQualPercent: 80
+  calledPercent: 95
+  highQualMin: 1.0e-2
+bowtie2:
+  bowtieDB: /fakepath/
+gsnap:
+  gsnapDB: /fakepath/
+star:
+  starDB: /fakepath/
+threads: 16
+assembler:
+  foo: bar
+cdhitdup:
+  maxSimilarity: 85
+ncbi:
+  ntDB: /fakepath/
+  nrDB: /fakepath/
+lzwfilter:
+  maxCompressionScore: 55
