@@ -1,3 +1,2 @@
 language: haskell
-env:
-  - GHCVER=8.0.1
+ghc: 8.0.1
