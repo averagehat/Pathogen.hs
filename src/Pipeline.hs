@@ -103,7 +103,7 @@ filterPair f in1 in2 o1 o2 = do
 
 -- | Split a string (note that | is needed for doctest
 -- >>> splitOn 'x' "AAxAA"
--- ["AA", "AA"]
+-- ["AA","AA"]
 splitOn delimiter = foldr f [[]]
             where f c l@(x:xs) | c == delimiter = []:l
                                 | otherwise = (c:x):xs
