@@ -8,11 +8,12 @@ homepage:             github.com/VDBWRAIR
 author:               Michael Panciera
 maintainer:           michael.panciera.work@gmail.com
 category:             Development
--- copyright:
 build-type:           Simple
--- extra-source-files:
 cabal-version:        >=1.10
 Tested-With: GHC == 8.0.1
+source-repository head
+    type: git
+    location::   https://github.com/averagehat/Pathogen.hs
 
 executable path-pipe-hs
   main-is:              Main.hs
