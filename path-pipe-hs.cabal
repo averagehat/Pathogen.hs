@@ -1,8 +1,8 @@
 name:                 Pathogen
 version:              0.1.0.0
 synopsis:             Pathogen discovery pipeline 
--- description:
--- license:
+description:         Pathogen Discovery by Walter Reed Army Institute of Research
+license:              GNUPLv.2
 -- license-file:
 homepage:             github.com/VDBWRAIR
 author:               Michael Panciera
