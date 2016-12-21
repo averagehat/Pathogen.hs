@@ -16,81 +16,133 @@ import qualified Data.Compressed.LZ78 as LZW
 import Config
 import qualified Data.Yaml as Y
 
-
 data ReadPair = RP FilePath FilePath
+type Fastq = FilePath
+type Sam = FilePath
+data SeqType = NT | NR
 
-block cfg = shakeArgs shakeOptions{shakeFiles="_build"} $ do
+--block :: Config -> Fastq -> Fastq -> Action ()
+block config input1 input2 = shakeArgs shakeOptions{shakeFiles="_build"} $ do
+
+  let ignore = "bar"
+   -- paste 'cat's files "vertically"
+  let paste src1 src2 out = cmd Shell "paste -d \t" src1 src2 ">" out
 
   want ["rapsearch.tsv", "gsnap.tsv"] -- final result of build
-  let ignore = "bar"
-  ["R1.lzw", "R2.lzw"] &%> \[out1, out2] -> do
-    let [src1, src2] = [input1 -<.> "deduped", input2 -<.> "deduped"]
-    need [src1, src2]
-    liftIO $ filterPair (not . (lowComplex 0.45)) src1 src2 out1 out2
+
+  "rapsearch.tsv" %> \out -> do
+    (src1, src2) <- need2 (out -<.> "tax") (out -<.> "m8")
+    paste src1 src2 out
+
+  "gsnap.tsv" %> \out -> do
+    (src1, src2) <- need2 (out -<.> "tax") (out -<.> "sam")
+    paste src1 src2 out
+
+  "rapsearch.tax" %> \out -> do
+    acc2tax NR out =<< needExt "gi" out
+
+  "gsnap.tax" %> \out -> do
+    acc2tax NT out =<< needExt "gi" out
 
   "rapsearch.gi" %> \out -> do
-    src  <- need' "rapsearch.m8"
-    rows <- lines <$> readFile' src
-    liftIO $ putStrLn "foo"
+    cmd Shell "cut -f 2 | cut -d \\| -f 2 >" out-- need to extract the GI
 --    let rows' = dropWhile (\xs -> (head xs) == '@') rows
 --    let gids  = map (\x -> head $ splitOn "|" $ head $ splitOn "\t" x) rows'
 --    writeFile' out $ L.intersperse "\n" gids
 
-  "rapsearch.tsv" %> \out -> do
-    src <- need' $ out -<.> "gi"
-    acc2tax NT src out
+  "gsnap.gi" %> \out -> do
+    cmd "gibber!"
+--  see above
+
+  "rapsearch.m8" %> \out -> do
+    (r1, r2) <- need2 "r1.bowtie" "r2.bowtie"
+    cmd "rapsearch" "-e" r1 r2 "-o" out "-d" $ rapsearchDB $ rapsearch config
+
+  "gsnap.sam" %> \out -> do
+    (r1, r2) <- need2 "r1.bowtie" "r2.bowtie"
+    cmd "gsnapl"r1 r2 "-A" out "-d" $ gsnapDB $ gsnap config 
+
+  ["r1.bowtie", "r2.bowtie"] &%> \[o1, o2] -> do
+    sam2fastq (RP o1 o2) =<< need' "bowtie.sam"
+
+  "bowtie.sam" %> \out -> do
+    (r1, r2) <- need2 "R1.deduped" "R2.deduped"
+    cmd "bowtie2" "-1" r1 "-2" r2 "-S" out "--very-sensitive-local" "-x" $ bowtieDB $ bowtie2 config
+
+  ["R1.deduped", "R2.deduped"] &%> \[out1, out2] -> do
+    (r1, r2) <- needExt2 "lzw" out1 out2
+    runCdHitDup (cdhitdup config) (RP r1 r2) (RP out1 out2)
+
+  ["R1.lzw", "R2.lzw"] &%> \[out1, out2] -> do
+    (src1, src2) <- needExt2 "deduped" input1 input2
+    liftIO $ filterPair (not . (lowComplex 0.45)) src1 src2 out1 out2
+
+  ["r1.psf", "r2.psf"] &%> \[o1, o2] -> do
+    (src1, src2) <- needExt2 "star" o1 o2
+    runPriceFilter (pricefilter config) (RP src1 src2) (RP o1 o2)
 
   ["r1.star", "r2.star"]  &%> \[r1, r2] -> do
-    let src = need' "star.bam"
-    -- somehow extract fwd and reverse out of the bam file
-    liftIO $ putStrLn "hey"
+    let src = need' "star.sam"
+    sam2fastq (RP r1 r2) =<< need' "star.sam"
 
-  "star.bam" %> \out -> do
+  "star.sam" %> \out -> do
     need [input1, input2]
-    runSTAR (STAROpts {starDB = "/baz"}) (RP input1 input2) out
+    runSTAR (star config) (RP input1 input2) out
 
   where
-    (input1, input2) = ("R1.fq", "R2.fq")
-    threads = 16
+    sam2fastq :: ReadPair -> Sam -> Action () 
+    sam2fastq (RP r1 r2) sam = undefined
+
+    --(input1, input2) = ("R1.fq", "R2.fq") 
+    runBowtie (BowtieOpts {bowtieDB=db}) (RP r1 r2) out = cmd' where
+      cmd' = cmd "bowtie2" "-1" r1 "-2" r2 "-x" db "-S" out "--very-sensitive-local"
+
+    runCdHitDup :: CDHitOpts -> ReadPair -> ReadPair -> Action ()
+    runCdHitDup CDHitOpts {minDifference=mindiff} (RP r1 r2) (RP o1 o2) = cmd' where
+      cmd' = cmd "cd-hit-dup"
+        "-i" r1  "-i2" r2
+        "-o" o1 "-o2" o2
+        "-e" $ show mindiff
+
+    runPriceFilter :: PriceSeqFilterOpts -> ReadPair -> ReadPair -> Action ()
+    runPriceFilter PriceSeqFilterOpts {calledPercent=cp, highQualPercent=hqp, highQualMin=hqm} (RP r1 r2) (RP o1 o2) = cmd' where
+      cmd' = cmd "PriceSeqFilter"
+        "-fp" r1 r2
+        "-op" o1 o2
+        "-rnf" (show cp)
+        "-rqf" (show hqp) (show hqm)
     runSTAR :: STAROpts -> ReadPair -> FilePath -> Action ()
     runSTAR STAROpts{starDB=db'} (RP r1 r2) out = cmd'
       where
-        cmd' = cmd "--readFilesIn" r1 r2 "--genomeDir" db' "--runThreadN" (show threads) "--outFileNamePrefix" (out -<.> "") "--outSAMtype" "BAM"
+        cmd' = cmd "--readFilesIn" r1 r2 "--genomeDir" db' "--runThreadN" (show $ threads config) "--outFileNamePrefix" (out -<.> "") "--outSAMtype" "SAM"
 
     acc2tax :: SeqType -> FilePath -> FilePath -> Action ()
-    acc2tax st fpin fpout = cmd "acc2tax" "--gi" "-i" fpin "-o" fpout "--database" db "--entries" ents type'
+    acc2tax st fpout fpin = cmd "acc2tax" "--gi" "-i" fpin "-o" fpout "--database" db "--entries" ents type'
       where
         ents = show 1114054124
         (db, type') = case st of -- also switch to get NR/NT db
-          NT -> ("NT", "--nucleotide")
-          NR -> ("NR", "--protein")
+          NT -> (ntDB $ ncbi config, "--nucleotide")
+          NR -> (nrDB $ ncbi config, "--protein")
 
 main = printConfig
---  cfg <- (Y.decodeEither <$> readFile "config.yaml" :: Maybe Config)
---  either block error' $ (bowtieDB . bowtie2) <$> cfg where
---    error' = putStrLn
 
-need' x = do
-  need [x]
-  return x
+need' x = need [x] >> return x
+needExt  ext fp = need' (fp -<.> ext)
 
-data SeqType = NT | NR
+needExt2 :: String -> FilePath -> FilePath -> Action (FilePath, FilePath)
+needExt2 ext a b = need2 (a -<.> ext) (b -<.> ext)
+
+need2 :: FilePath -> FilePath -> Action (FilePath, FilePath)
+need2        a b = need [a, b] >> return (a, b)
 
 
-
---lowComplex :: BioSeqQual s => Double -> s -> Bool
---lowComplex :: Double -> Sequence -> Bool
---lowComplex :: BioSeq s => Double -> s -> Bool
 lowComplex n s = compScore < n  where
   compScore    = (ucSize - cSize) / ucSize
   cSize        = length' $ LZW.encode uncompressed -- encode expects [a]
   ucSize       = length' uncompressed
   uncompressed = BB.unpack $ unSD $ seqdata s -- so need to unpack
-  --length' :: Foldable f => (f a) -> Int
   length' xs = foldr (\_ z -> z + 1) 0 xs
 
---filterPair :: BioSeq s => (s -> Bool) -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
--- filterPair :: (Sequence -> Bool) -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
 filterPair f in1 in2 o1 o2 = do
   r1 <- readSangerQ in1
   r2 <- readSangerQ in2
@@ -99,15 +151,3 @@ filterPair f in1 in2 o1 o2 = do
   writeSangerQ o2 r2'
   where
     pred (fwd, rev) = (f fwd) && (f rev)
-
-
--- | Split a string (note that | is needed for doctest
--- >>> splitOn 'x' "AAxAA"
--- ["AA","AA"]
-splitOn delimiter = foldr f [[]]
-            where f c l@(x:xs) | c == delimiter = []:l
-                                | otherwise = (c:x):xs
-
-
--- cmd' :: Show a => [(String, a)] -> IO ()
--- cmd' opts = cmd $ concat $  map (\(opt,val) -> ["--" ++ opt, show val]) opts

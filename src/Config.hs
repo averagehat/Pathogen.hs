@@ -7,8 +7,8 @@ import qualified Data.Yaml
 import Data.Aeson hiding (encode)
 import qualified Data.ByteString.Char8 as B
 -- TODO: give everything lenses via (Aeson's?) makeLens?
-data CommandArgs = CommandArgs { r1 :: FilePath <?> "Forward"
-  , r2 :: FilePath <?> "Reverse"
+data CommandArgs = CommandArgs { forward :: FilePath <?> "Forward"
+  , reverse :: FilePath <?> "Reverse"
   , i1 :: FilePath <?> "Forward Index"
   , i2 :: FilePath <?> "Reverse Index"
   , outdir :: FilePath <?> "Output Directory"
@@ -35,14 +35,14 @@ data STAROpts = STAROpts { starDB :: FilePath }
 instance FromJSON STAROpts
 instance ToJSON STAROpts
 
-data PriceSeqFilterOpts = PSFopts { calledPercent :: Int -- <= 100
+data PriceSeqFilterOpts = PriceSeqFilterOpts { calledPercent :: Int -- <= 100
                                   , highQualPercent :: Int -- <=100
                                   , highQualMin :: Float } -- <= 1
   deriving (Generic, Show)
 instance FromJSON PriceSeqFilterOpts
 instance ToJSON PriceSeqFilterOpts
 
-data CDHitOpts = CDHitOpts { maxSimilarity :: Percent } -- <= 1
+data CDHitOpts = CDHitOpts { minDifference :: Percent } -- <= 1
   deriving (Generic, Show)
 instance FromJSON CDHitOpts
 instance ToJSON CDHitOpts
@@ -101,11 +101,11 @@ printConfig = do
 
 config' = Config { threads = 16
                  , star = STAROpts { starDB = p }
-                 , pricefilter = PSFopts { calledPercent = 95
+                 , pricefilter = PriceSeqFilterOpts { calledPercent = 95
                                          , highQualPercent = 80
                                          , highQualMin = 0.01 }
                  , lzwfilter = LZWOpts { maxCompressionScore = 55 }
-                 , cdhitdup  = CDHitOpts { maxSimilarity = 85 }
+                 , cdhitdup  = CDHitOpts { minDifference = 15 }
                  , bowtie2   = BowtieOpts { bowtieDB = p }
                  , gsnap   = GSNAPOpts { gsnapDB = p }
                  , rapsearch   = RapSearchOpts { rapsearchDB = p }
