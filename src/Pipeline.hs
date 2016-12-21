@@ -91,7 +91,9 @@ block config input1 input2 = shakeArgs shakeOptions{shakeFiles="_build"} $ do
 
   where
     sam2fastq :: ReadPair -> Sam -> Action () 
-    sam2fastq (RP r1 r2) sam = undefined
+    sam2fastq (RP r1 r2) sam = cmd "java -jar picard.jar SamToFASTQ" 
+      ("I" <=> sam) ("FASTQ" <=> r1) ("SECOND_END_FASTQ" <=> r2)
+      where x <=> y = x ++ "=" ++ y
 
     --(input1, input2) = ("R1.fq", "R2.fq") 
     runBowtie (BowtieOpts {bowtieDB=db}) (RP r1 r2) out = cmd' where
