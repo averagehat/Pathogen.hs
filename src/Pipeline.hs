@@ -37,7 +37,7 @@ block config input1 input2 = shakeArgs shakeOptions{shakeFiles="_build"} $ do
 
   "gsnap.tsv" %> \out -> do
     taxa <- needExt "tax" out
-    m8   <- needExt "sam" out
+    sam   <- needExt "sam" out
     paste sam taxa out
 
   "rapsearch.tax" %> \out -> do
@@ -59,6 +59,11 @@ block config input1 input2 = shakeArgs shakeOptions{shakeFiles="_build"} $ do
   "rapsearch.m8" %> \out -> do
     (r1, r2) <- need2 "r1.bowtie" "r2.bowtie"
     cmd "rapsearch" "-e" r1 r2 "-o" out "-d" $ rapsearchDB $ rapsearch config
+
+  "gsnap.samsv" %> \out -> do
+    sam <- needExt "sam" out
+    writeFile' out "query\tsubject\tcigar"
+    cmd Shell "grep -v ^@" sam "| awk -v OFS='\t' '{print $1, $3 $6}' >" out
 
   "gsnap.sam" %> \out -> do
     (r1, r2) <- need2 "r1.bowtie" "r2.bowtie"
