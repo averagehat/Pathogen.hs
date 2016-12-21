@@ -31,12 +31,14 @@ block config input1 input2 = shakeArgs shakeOptions{shakeFiles="_build"} $ do
   want ["rapsearch.tsv", "gsnap.tsv"] -- final result of build
 
   "rapsearch.tsv" %> \out -> do
-    (src1, src2) <- need2 (out -<.> "tax") (out -<.> "m8")
-    paste src1 src2 out
+    taxa <- needExt "tax" out
+    m8   <- needExt "m8" out
+    paste m8 taxa out
 
   "gsnap.tsv" %> \out -> do
-    (src1, src2) <- need2 (out -<.> "tax") (out -<.> "sam")
-    paste src1 src2 out
+    taxa <- needExt "tax" out
+    m8   <- needExt "sam" out
+    paste sam taxa out
 
   "rapsearch.tax" %> \out -> do
     acc2tax NR out =<< needExt "gi" out
@@ -136,7 +138,6 @@ needExt2 ext a b = need2 (a -<.> ext) (b -<.> ext)
 
 need2 :: FilePath -> FilePath -> Action (FilePath, FilePath)
 need2        a b = need [a, b] >> return (a, b)
-
 
 lowComplex n s = compScore < n  where
   compScore    = (ucSize - cSize) / ucSize
