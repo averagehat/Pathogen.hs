@@ -6,12 +6,14 @@ import Options.Generic  -- ((<?>), ParseRecord)
 import qualified Data.Yaml
 import Data.Aeson hiding (encode)
 import qualified Data.ByteString.Char8 as B
+import Data.Maybe 
 -- TODO: give everything lenses via (Aeson's?) makeLens?
-data CommandArgs = CommandArgs { forward :: FilePath <?> "Forward"
-  , reverse :: FilePath <?> "Reverse"
-  , i1 :: FilePath <?> "Forward Index"
-  , i2 :: FilePath <?> "Reverse Index"
-  , outdir :: FilePath <?> "Output Directory"
+data CommandArgs = CommandArgs {
+    r1 :: FilePath <?> "Forward"
+  , r2 :: FilePath <?> "Reverse"
+  , i1 :: Maybe FilePath <?> "Forward Index"
+  , i2 :: Maybe FilePath <?> "Reverse Index"
+  , outdir :: Maybe FilePath <?> "Output Directory"
   , config :: FilePath <?> "Path to config.yaml" }
   deriving (Generic, Show)
 instance ParseRecord CommandArgs

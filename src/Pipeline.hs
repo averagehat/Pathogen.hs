@@ -17,13 +17,21 @@ import Config
 import qualified Data.Yaml as Y
 import System.Time.Extra (offsetTime, showDuration)
 import System.IO.Unsafe (unsafePerformIO)
+import Options.Generic  (getRecord, unHelpful)
+import qualified Data.Text as T
+
 data ReadPair = RP FilePath FilePath
 type Fastq = FilePath
 type Sam = FilePath
 data SeqType = NT | NR
 
+
 --block :: Config -> Fastq -> Fastq -> Action ()
-block config input1 input2 = shakeArgs shakeOptions{shakeFiles="_build"} $ do
+-- replace "_build" with outdir
+--block config input1 input2 = shakeArgs shakeOptions{shakeFiles="_build"} $ do
+block config input1 input2 = shake shakeOptions $ do
+  let r1_deduped = input1 -<.> "deduped"
+  let r2_deduped = input2 -<.> "deduped"
 
   let ignore = "bar"
    -- paste 'cat's files "vertically"
@@ -48,12 +56,15 @@ block config input1 input2 = shakeArgs shakeOptions{shakeFiles="_build"} $ do
     acc2tax NT out =<< needExt "gi" out
 
   "rapsearch.gi" %> \out -> do
-    cmd Shell "cut -f 2 | cut -d \\| -f 2 >" out-- need to extract the GI
+    src <- need' "rapsearch.m8"
+    cmd "gibber!"
+    --cmd Shell "cut -f 2 | cut -d \\| -f 2 >" out-- need to extract the GI
 --    let rows' = dropWhile (\xs -> (head xs) == '@') rows
 --    let gids  = map (\x -> head $ splitOn "|" $ head $ splitOn "\t" x) rows'
 --    writeFile' out $ L.intersperse "\n" gids
 
   "gsnap.gi" %> \out -> do
+    src <- need' "gsnap.samsv"
     cmd "gibber!"
 --  see above
 
@@ -67,29 +78,29 @@ block config input1 input2 = shakeArgs shakeOptions{shakeFiles="_build"} $ do
     cmd Shell "grep -v ^@" sam "| awk -v OFS='\t' '{print $1, $3 $6}' >" out
 
   "gsnap.sam" %> \out -> do
-    (r1, r2) <- need2 "r1.bowtie" "r2.bowtie"
+    (r1, r2) <- need2 "R1.bowtie" "R2.bowtie"
     cmd "gsnapl"r1 r2 "-A" out "-d" $ gsnapDB $ gsnap config 
 
-  ["r1.bowtie", "r2.bowtie"] &%> \[o1, o2] -> do
+  ["R1.bowtie", "R2.bowtie"] &%> \[o1, o2] -> do
     sam2fastq (RP o1 o2) =<< need' "bowtie.sam"
 
   "bowtie.sam" %> \out -> do
     (r1, r2) <- need2 "R1.deduped" "R2.deduped"
     cmd "bowtie2" "-1" r1 "-2" r2 "-S" out "--very-sensitive-local" "-x" $ bowtieDB $ bowtie2 config
 
-  ["R1.deduped", "R2.deduped"] &%> \[out1, out2] -> do
-    (r1, r2) <- needExt2 "lzw" out1 out2
-    runCdHitDup (cdhitdup config) (RP r1 r2) (RP out1 out2)
-
   ["R1.lzw", "R2.lzw"] &%> \[out1, out2] -> do
-    (src1, src2) <- needExt2 "deduped" input1 input2
+    (src1, src2) <- needExt2 "deduped" out1 out2
     liftIO $ filterPair (not . (lowComplex 0.45)) src1 src2 out1 out2
 
-  ["r1.psf", "r2.psf"] &%> \[o1, o2] -> do
+  ["R1.deduped", "R2.deduped"] &%> \[out1, out2] -> do
+    (r1, r2) <- needExt2 "psf" out1 out2
+    runCdHitDup (cdhitdup config) (RP r1 r2) (RP out1 out2)
+
+  ["R1.psf", "R2.psf"] &%> \[o1, o2] -> do
     (src1, src2) <- needExt2 "star" o1 o2
     runPriceFilter (pricefilter config) (RP src1 src2) (RP o1 o2)
 
-  ["r1.star", "r2.star"]  &%> \[r1, r2] -> do
+  ["R1.star", "R2.star"]  &%> \[r1, r2] -> do
     let src = need' "star.sam"
     sam2fastq (RP r1 r2) =<< need' "star.sam"
 
@@ -124,7 +135,7 @@ block config input1 input2 = shakeArgs shakeOptions{shakeFiles="_build"} $ do
     runSTAR :: STAROpts -> ReadPair -> FilePath -> Action ()
     runSTAR STAROpts{starDB=db'} (RP r1 r2) out = cmd'
       where
-        cmd' = cmd "--readFilesIn" r1 r2 "--genomeDir" db' "--runThreadN" (show $ threads config) "--outFileNamePrefix" (out -<.> "") "--outSAMtype" "SAM"
+        cmd' = cmd "STAR" "--readFilesIn" r1 r2 "--genomeDir" db' "--runThreadN" (show $ threads config) "--outFileNamePrefix" (out -<.> "") "--outSAMtype" "SAM"
 
     acc2tax :: SeqType -> FilePath -> FilePath -> Action ()
     acc2tax st fpout fpin = cmd "acc2tax" "--gi" "-i" fpin "-o" fpout "--database" db "--entries" ents type'
@@ -134,7 +145,6 @@ block config input1 input2 = shakeArgs shakeOptions{shakeFiles="_build"} $ do
           NT -> (ntDB $ ncbi config, "--nucleotide")
           NR -> (nrDB $ ncbi config, "--protein")
 
-main = printConfig
 
 need' x = need [x] >> return x
 needExt  ext fp = need' (fp -<.> ext)
@@ -160,17 +170,26 @@ filterPair f in1 in2 o1 o2 = do
   writeSangerQ o2 r2'
   where
     pred (fwd, rev) = (f fwd) && (f rev)
+
 -- https://github.com/ndmitchell/shake/issues/483
---time_ :: IO (CmdLine, CmdTime) -> IO ()
---time_ act = time $ do (a,b) <- act; return (a,b,())
---
 
 {-# NOINLINE logTime #-}
 --logTime :: IO Seconds
 logTime = unsafePerformIO offsetTime
+
 time :: IO (CmdLine, CmdTime, a) -> IO a
 time act = do
     (CmdLine msg, CmdTime tim, res) <- act
     tot <- logTime
     putStrLn $ "[BAKE-TIME] " ++ showDuration tim ++ " (total of " ++ showDuration tot ++ "): " ++ msg
     return res
+
+time_ :: IO (CmdLine, CmdTime) -> IO ()
+time_ act = time $ do (a,b) <- act; return (a,b,()) 
+
+main = do
+  opts <- getRecord $ T.pack "Running Pathogen.hs" :: IO CommandArgs
+  cfg <- readYaml $ unHelpful $ config opts 
+  case cfg of
+    Right cfg' -> block cfg' (unHelpful $ r1 opts) (unHelpful $ r2 opts) 
+    Left err -> putStrLn err 
