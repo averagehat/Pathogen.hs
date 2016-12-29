@@ -15,7 +15,8 @@ import Development.Shake.Util
 import qualified Data.Compressed.LZ78 as LZW
 import Config
 import qualified Data.Yaml as Y
-
+import System.Time.Extra (offsetTime, showDuration)
+import System.IO.Unsafe (unsafePerformIO)
 data ReadPair = RP FilePath FilePath
 type Fastq = FilePath
 type Sam = FilePath
@@ -159,3 +160,17 @@ filterPair f in1 in2 o1 o2 = do
   writeSangerQ o2 r2'
   where
     pred (fwd, rev) = (f fwd) && (f rev)
+-- https://github.com/ndmitchell/shake/issues/483
+--time_ :: IO (CmdLine, CmdTime) -> IO ()
+--time_ act = time $ do (a,b) <- act; return (a,b,())
+--
+
+{-# NOINLINE logTime #-}
+--logTime :: IO Seconds
+logTime = unsafePerformIO offsetTime
+time :: IO (CmdLine, CmdTime, a) -> IO a
+time act = do
+    (CmdLine msg, CmdTime tim, res) <- act
+    tot <- logTime
+    putStrLn $ "[BAKE-TIME] " ++ showDuration tim ++ " (total of " ++ showDuration tot ++ "): " ++ msg
+    return res
