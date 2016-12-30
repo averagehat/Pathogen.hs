@@ -25,11 +25,13 @@ type Fastq = FilePath
 type Sam = FilePath
 data SeqType = NT | NR
 
+-- TODO: get some toy databases (not hg38)
 
 --block :: Config -> Fastq -> Fastq -> Action ()
 -- replace "_build" with outdir
 --block config input1 input2 = shakeArgs shakeOptions{shakeFiles="_build"} $ do
 block config input1 input2 = shake shakeOptions $ do
+  --(input1, input2) = ("R1.fq", "R2.fq") 
   let r1_deduped = input1 -<.> "deduped"
   let r2_deduped = input2 -<.> "deduped"
 
@@ -38,6 +40,12 @@ block config input1 input2 = shake shakeOptions $ do
   let paste src1 src2 out = cmd Shell "paste -d \t" src1 src2 ">" out
 
   want ["rapsearch.tsv", "gsnap.tsv"] -- final result of build
+
+  let r1_star = "Unmapped.out.mate1"
+  let r2_star = "Unmapped.out.mate2"
+
+  let r1_bowtie = "bowtie.unmapped.1"
+  let r2_bowtie = "bowtie.unmapped.2"
 
   "rapsearch.tsv" %> \out -> do
     taxa <- needExt "tax" out
@@ -78,46 +86,35 @@ block config input1 input2 = shake shakeOptions $ do
     cmd Shell "grep -v ^@" sam "| awk -v OFS='\t' '{print $1, $3 $6}' >" out
 
   "gsnap.sam" %> \out -> do
-    (r1, r2) <- need2 "R1.bowtie" "R2.bowtie"
+    (r1, r2) <- need2 r1_bowtie r2_bowtie
     cmd "gsnapl"r1 r2 "-A" out "-d" $ gsnapDB $ gsnap config 
 
-  ["R1.bowtie", "R2.bowtie"] &%> \[o1, o2] -> do
-    sam2fastq (RP o1 o2) =<< need' "bowtie.sam"
-
-  "bowtie.sam" %> \out -> do
+  [r1_bowtie, r2_bowtie] &%> \[o1, _] -> do
     (r1, r2) <- need2 "R1.deduped" "R2.deduped"
-    cmd "bowtie2" "-1" r1 "-2" r2 "-S" out "--very-sensitive-local" "-x" $ bowtieDB $ bowtie2 config
+    cmd "bowtie2" "-1" r1 "-2" r2 "--very-sensitive-local" 
+      "--un-conc" (dropExtension o1)
+      "-x" $ bowtieDB $ bowtie2 config
 
   ["R1.lzw", "R2.lzw"] &%> \[out1, out2] -> do
     (src1, src2) <- needExt2 "deduped" out1 out2
-    liftIO $ filterPair (not . (lowComplex 0.45)) src1 src2 out1 out2
+    liftIO $ filterPair (not . (lowComplex 0.45)) src1 src2 out1 out2 
 
   ["R1.deduped", "R2.deduped"] &%> \[out1, out2] -> do
     (r1, r2) <- needExt2 "psf" out1 out2
     runCdHitDup (cdhitdup config) (RP r1 r2) (RP out1 out2)
 
   ["R1.psf", "R2.psf"] &%> \[o1, o2] -> do
-    (src1, src2) <- needExt2 "star" o1 o2
-    runPriceFilter (pricefilter config) (RP src1 src2) (RP o1 o2)
+    need [r1_star, r2_star]
+    runPriceFilter (pricefilter config) (RP r1_star r2_star) (RP o1 o2)
 
-  ["R1.star", "R2.star"]  &%> \[r1, r2] -> do
-    let src = need' "star.sam"
-    sam2fastq (RP r1 r2) =<< need' "star.sam"
-
-  "star.sam" %> \out -> do
+  [r1_star, r2_star] &%> \_ -> do
     need [input1, input2]
-    runSTAR (star config) (RP input1 input2) out
+    cmd "STAR" "--readFilesIn" input1 input2 
+        "--genomeDir" (starDB $ star config) 
+        "--runThreadN" (show $ threads config) 
+        "--outSAMtype SAM" "--outReadsUnmapped"
 
   where
-    sam2fastq :: ReadPair -> Sam -> Action () 
-    sam2fastq (RP r1 r2) sam = cmd "java -jar picard.jar SamToFASTQ" 
-      ("I" <=> sam) ("FASTQ" <=> r1) ("SECOND_END_FASTQ" <=> r2)
-      where x <=> y = x ++ "=" ++ y
-
-    --(input1, input2) = ("R1.fq", "R2.fq") 
-    runBowtie (BowtieOpts {bowtieDB=db}) (RP r1 r2) out = cmd' where
-      cmd' = cmd "bowtie2" "-1" r1 "-2" r2 "-x" db "-S" out "--very-sensitive-local"
-
     runCdHitDup :: CDHitOpts -> ReadPair -> ReadPair -> Action ()
     runCdHitDup CDHitOpts {minDifference=mindiff} (RP r1 r2) (RP o1 o2) = cmd' where
       cmd' = cmd "cd-hit-dup"
