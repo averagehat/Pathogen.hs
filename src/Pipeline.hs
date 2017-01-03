@@ -19,7 +19,7 @@ import System.Time.Extra (offsetTime, showDuration)
 import System.IO.Unsafe (unsafePerformIO)
 import Options.Generic  (getRecord, unHelpful)
 import qualified Data.Text as T
-
+import Index (buildIndex)
 data ReadPair = RP FilePath FilePath
 type Fastq = FilePath
 type Sam = FilePath
@@ -107,12 +107,12 @@ block config input1 input2 = shake shakeOptions $ do
     need [r1_star, r2_star]
     runPriceFilter (pricefilter config) (RP r1_star r2_star) (RP o1 o2)
 
-  [r1_star, r2_star] &%> \_ -> do
+  [r1_star, r2_star] &%> \[o1, _] -> do
     need [input1, input2]
     cmd "STAR" "--readFilesIn" input1 input2 
         "--genomeDir" (starDB $ star config) 
         "--runThreadN" (show $ threads config) 
-        "--outSAMtype SAM" "--outReadsUnmapped"
+        "--outSAMtype SAM" "--outReadsUnmapped" $ dropExtension o1
 
   where
     runCdHitDup :: CDHitOpts -> ReadPair -> ReadPair -> Action ()
@@ -186,7 +186,12 @@ time_ act = time $ do (a,b) <- act; return (a,b,())
 
 main = do
   opts <- getRecord $ T.pack "Running Pathogen.hs" :: IO CommandArgs
-  cfg <- readYaml $ unHelpful $ config opts 
+  case opts of 
+    Index{} -> buildIndex opts
+    Run{}   -> runPipeline opts
+
+runPipeline opts = do 
+  cfg <- readYaml $ unHelpful $ config opts
   case cfg of
     Right cfg' -> block cfg' (unHelpful $ r1 opts) (unHelpful $ r2 opts) 
     Left err -> putStrLn err 
