@@ -65,11 +65,10 @@ block config input1 input2 = shake shakeOptions $ do
 
   "rapsearch.gi" %> \out -> do
     src <- need' "rapsearch.m8"
-    cmd "gibber!"
     --cmd Shell "cut -f 2 | cut -d \\| -f 2 >" out-- need to extract the GI
---    let rows' = dropWhile (\xs -> (head xs) == '@') rows
---    let gids  = map (\x -> head $ splitOn "|" $ head $ splitOn "\t" x) rows'
---    writeFile' out $ L.intersperse "\n" gids
+    s <- T.pack <$> readFile' src
+    let giStr = getGI s
+    writeFile' out giStr
 
   "gsnap.gi" %> \out -> do
     src <- need' "gsnap.samsv"
@@ -97,7 +96,7 @@ block config input1 input2 = shake shakeOptions $ do
 
   ["R1.lzw", "R2.lzw"] &%> \[out1, out2] -> do
     (src1, src2) <- needExt2 "deduped" out1 out2
-    liftIO $ filterPair (not . (lowComplex 0.45)) src1 src2 out1 out2 
+    liftIO $ filterPair (not . lowComplex 0.45) src1 src2 out1 out2 
 
   ["R1.deduped", "R2.deduped"] &%> \[out1, out2] -> do
     (r1, r2) <- needExt2 "psf" out1 out2
@@ -138,7 +137,7 @@ block config input1 input2 = shake shakeOptions $ do
     acc2tax st fpout fpin = cmd "acc2tax" "--gi" "-i" fpin "-o" fpout "--database" db "--entries" ents type'
       where
         ents = show 1114054124
-        (db, type') = case st of -- also switch to get NR/NT db
+        (db, type') = case st of
           NT -> (ntDB $ ncbi config, "--nucleotide")
           NR -> (nrDB $ ncbi config, "--protein")
 
@@ -151,6 +150,11 @@ needExt2 ext a b = need2 (a -<.> ext) (b -<.> ext)
 
 need2 :: FilePath -> FilePath -> Action (FilePath, FilePath)
 need2        a b = need [a, b] >> return (a, b)
+
+getGI :: T.Text -> String
+getGI s = let rows = dropWhile (\xs -> T.head xs == '#') $ T.lines s
+              gis  = map (\x -> flip (!!) 1 $ T.splitOn (T.pack "|") $ T.splitOn (T.pack "\t") x !! 1) rows  in
+    L.intercalate "\n" $ map T.unpack gis
 
 lowComplex n s = compScore < n  where
   compScore    = (ucSize - cSize) / ucSize
@@ -166,7 +170,7 @@ filterPair f in1 in2 o1 o2 = do
   writeSangerQ o1 r1'
   writeSangerQ o2 r2'
   where
-    pred (fwd, rev) = (f fwd) && (f rev)
+    pred (fwd, rev) = f fwd && f rev
 
 -- https://github.com/ndmitchell/shake/issues/483
 
