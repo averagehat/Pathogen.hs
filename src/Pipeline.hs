@@ -12,6 +12,7 @@ import Development.Shake
 import Development.Shake.Command
 import Development.Shake.FilePath
 import Development.Shake.Util
+import Data.Traversable (for)
 import qualified Data.Compressed.LZ78 as LZW
 import Config
 import qualified Data.Yaml as Y
@@ -36,10 +37,9 @@ block config input1 input2 = shake shakeOptions $ do
   let r2_deduped = input2 -<.> "deduped"
 
   let ignore = "bar"
-   -- paste 'cat's files "vertically"
-  let paste src1 src2 out = cmd Shell "paste -d \t" src1 src2 ">" out
 
-  want ["rapsearch.tsv", "gsnap.tsv"] -- final result of build
+  --want ["rapsearch.tsv", "gsnap.tsv"] -- final result of build
+  want ["NR.tax.R1", "NR.tax.R2", "NT.tax.R1", "NT.tax.R2"]
 
   let r1_star = "Unmapped.out.mate1"
   let r2_star = "Unmapped.out.mate2"
@@ -47,47 +47,9 @@ block config input1 input2 = shake shakeOptions $ do
   let r1_bowtie = "bowtie.unmapped.1"
   let r2_bowtie = "bowtie.unmapped.2"
 
-  "rapsearch.tsv" %> \out -> do
-    taxa <- needExt "tax" out
-    m8   <- needExt "m8" out
-    paste m8 taxa out
+  pairRule "R1" r1_bowtie
 
-  "gsnap.tsv" %> \out -> do
-    taxa <- needExt "tax" out
-    sam   <- needExt "sam" out
-    paste sam taxa out
-
-  "rapsearch.tax" %> \out -> do
-    acc2tax NR out =<< needExt "gi" out
-
-  "gsnap.tax" %> \out -> do
-    acc2tax NT out =<< needExt "gi" out
-
-  "rapsearch.gi" %> \out -> do
-    src <- need' "rapsearch.m8"
-    cmd "gibber!"
-    --cmd Shell "cut -f 2 | cut -d \\| -f 2 >" out-- need to extract the GI
---    let rows' = dropWhile (\xs -> (head xs) == '@') rows
---    let gids  = map (\x -> head $ splitOn "|" $ head $ splitOn "\t" x) rows'
---    writeFile' out $ L.intersperse "\n" gids
-
-  "gsnap.gi" %> \out -> do
-    src <- need' "gsnap.samsv"
-    cmd "gibber!"
---  see above
-
-  "rapsearch.m8" %> \out -> do
-    (r1, r2) <- need2 "r1.bowtie" "r2.bowtie"
-    cmd "rapsearch" "-e" r1 r2 "-o" out "-d" $ rapsearchDB $ rapsearch config
-
-  "gsnap.samsv" %> \out -> do
-    sam <- needExt "sam" out
-    writeFile' out "query\tsubject\tcigar"
-    cmd Shell "grep -v ^@" sam "| awk -v OFS='\t' '{print $1, $3 $6}' >" out
-
-  "gsnap.sam" %> \out -> do
-    (r1, r2) <- need2 r1_bowtie r2_bowtie
-    cmd "gsnapl"r1 r2 "-A" out "-d" $ gsnapDB $ gsnap config 
+  pairRule "R2" r2_bowtie
 
   [r1_bowtie, r2_bowtie] &%> \[o1, _] -> do
     (r1, r2) <- need2 "R1.deduped" "R2.deduped"
@@ -97,7 +59,7 @@ block config input1 input2 = shake shakeOptions $ do
 
   ["R1.lzw", "R2.lzw"] &%> \[out1, out2] -> do
     (src1, src2) <- needExt2 "deduped" out1 out2
-    liftIO $ filterPair (not . (lowComplex 0.45)) src1 src2 out1 out2 
+    liftIO $ filterPair (not . lowComplex 0.45) src1 src2 out1 out2 
 
   ["R1.deduped", "R2.deduped"] &%> \[out1, out2] -> do
     (r1, r2) <- needExt2 "psf" out1 out2
@@ -138,10 +100,33 @@ block config input1 input2 = shake shakeOptions $ do
     acc2tax st fpout fpin = cmd "acc2tax" "--gi" "-i" fpin "-o" fpout "--database" db "--entries" ents type'
       where
         ents = show 1114054124
-        (db, type') = case st of -- also switch to get NR/NT db
+        (db, type') = case st of
           NT -> (ntDB $ ncbi config, "--nucleotide")
           NR -> (nrDB $ ncbi config, "--protein")
 
+    pairRule :: String -> FilePath -> Rules ()
+    pairRule s fq = do
+
+     for ["NT", "NR"] $ \t -> do
+
+       t <.> "tsv" <.> s %> \out -> do
+         taxa <- need' $ t <.> "tax" <.> s
+         m8   <- need' $ t <.> "m8" <.> s
+         paste m8 taxa out
+
+       t <.> "tax" <.> s %> \out ->
+         acc2tax NR out =<< need' (t <.> "gi" <.> s)
+
+       t <.> "gi" <.> s %> \out -> 
+          writeFile' out . getGI . T.pack =<< readFile' =<< need' (t <.> "m8" <.> s)
+
+     "NR.m8" <.> s %> \out -> 
+       cmd "rapsearch -o" out "-d" (rapsearchDB $ rapsearch config) "-q" =<< need' fq
+  
+     "NT.m8" <.> s %> \out ->
+       cmd "blastn -m 8 -db" (ntDB $ ncbi config) "-o" out "-q" =<< need' fq 
+      -- paste 'cat's files "vertically"
+      where paste src1 src2 out = cmd Shell "paste -d \t" src1 src2 ">" out
 
 need' x = need [x] >> return x
 needExt  ext fp = need' (fp -<.> ext)
@@ -151,6 +136,11 @@ needExt2 ext a b = need2 (a -<.> ext) (b -<.> ext)
 
 need2 :: FilePath -> FilePath -> Action (FilePath, FilePath)
 need2        a b = need [a, b] >> return (a, b)
+
+getGI :: T.Text -> String
+getGI s = let rows = dropWhile (\xs -> T.head xs == '#') $ T.lines s
+              gis  = map (\x -> flip (!!) 1 $ T.splitOn (T.pack "|") $ T.splitOn (T.pack "\t") x !! 1) rows  in
+    L.intercalate "\n" $ map T.unpack gis
 
 lowComplex n s = compScore < n  where
   compScore    = (ucSize - cSize) / ucSize
@@ -166,7 +156,7 @@ filterPair f in1 in2 o1 o2 = do
   writeSangerQ o1 r1'
   writeSangerQ o2 r2'
   where
-    pred (fwd, rev) = (f fwd) && (f rev)
+    pred (fwd, rev) = f fwd && f rev
 
 -- https://github.com/ndmitchell/shake/issues/483
 
@@ -195,3 +185,60 @@ runPipeline opts = do
   case cfg of
     Right cfg' -> block cfg' (unHelpful $ r1 opts) (unHelpful $ r2 opts) 
     Left err -> putStrLn err 
+
+
+--  "NT.gi" %> \out -> do
+--    writeFile' out . getGI . T.pack =<< readFile' =<< need' "NT.tsv"
+--  
+--  "NR-R1.m8" %> \out ->
+--    cmd "rapsearch -o" out "-d" (rapsearchDB $ rapsearch config) "-q" =<< need' r1_bowtie
+--
+--  "NR-R2.m8" %> \out ->
+--    cmd "rapsearch -o" out "-d" (rapsearchDB $ rapsearch config) "-q" =<< need' r2_bowtie
+--
+--  "NT-R1.tsv" %> \out -> do --- should make e-value etc. configurable
+--     cmd "blastn -m 8 -db" (ntDB $ ncbi config) "-o" out "-q" =<< need' r1_bowtie
+--    
+--  "NT-R2.tsv" %> \out -> do --- should make e-value etc. configurable
+--     cmd "blastn -m 8 -db" (ntDB $ ncbi config) "-o" out "-q" =<< need' r2_bowtie
+
+--  "gsnap.gi" %> \out -> do
+--    src <- need' "gsnap.samsv"
+--    cmd "gibber!"
+----  see above
+----
+--  "gsnap.samsv" %> \out -> do
+--    sam <- needExt "sam" out
+--    writeFile' out "query\tsubject\tcigar"
+--    cmd Shell "grep -v ^@" sam "| awk -v OFS='\t' '{print $1, $3 $6}' >" out
+--
+--  "gsnap.sam" %> \out -> do
+--    (r1, r2) <- need2 r1_bowtie r2_bowtie
+--    cmd "gsnapl"r1 r2 "-A" out "-d" $ gsnapDB $ gsnap config 
+
+--  "rapsearch.tsv" %> \out -> do
+--    taxa <- needExt "tax" out
+--    m8   <- needExt "m8" out
+--    paste m8 taxa out
+--
+--  "gsnap.tsv" %> \out -> do
+--    taxa <- needExt "tax" out
+--    sam   <- needExt "sam" out
+--    paste sam taxa out
+--
+--  "rapsearch.tax" %> \out -> do
+--    acc2tax NR out =<< needExt "gi" out
+--
+--  "gsnap.tax" %> \out -> do
+--    acc2tax NT out =<< needExt "gi" out
+--
+--  "rapsearch.gi" %> \out -> do
+--    src <- need' "rapsearch.m8"
+--    --cmd Shell "cut -f 2 | cut -d \\| -f 2 >" out-- need to extract the GI
+--    s <- T.pack <$> readFile' src
+--    writeFile' out $ getGI s
+--
+--  "rapsearch.m8" %> \out -> do
+--    (r1, r2) <- need2 "r1.bowtie" "r2.bowtie"
+--    cmd "rapsearch" "-e" r1 r2 "-o" out "-d" $ rapsearchDB $ rapsearch config
+--  

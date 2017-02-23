@@ -36,14 +36,16 @@ test-suite  unit-tests
 
 test-suite doctests
   type:          exitcode-stdio-1.0
-  ghc-options:   -threaded
+  ghc-options:   
+    -threaded
+    -Wall
   hs-source-dirs: test
   main-is:       DocTest.hs
   build-depends: base, doctest >= 0.8
 
 library
   hs-source-dirs:     src
-  exposed-modules:    Config, Pipeline
+  exposed-modules:    Config, Pipeline, Index
   build-depends:      base >= 4.7 && < 5
                       , shake
                       , temporary
