@@ -5,7 +5,8 @@ import Data.Word (Word8)
 import System.Directory(doesFileExist)
 import Control.Applicative
 import Bio.Sequence.FastQ (readSangerQ, writeSangerQ)
-import Bio.Core.Sequence (BioSeqQual, BioSeq, unSD, seqheader, seqdata, seqqual, unQD, unQual)
+import Bio.Sequence.Fasta (writeFasta, Sequence(..)) --, mkSeq, bleh)
+import Bio.Core.Sequence (BioSeqQual, BioSeq, unSD, seqheader, seqdata, seqqual, unQD, unQual, seqid)
 import qualified Data.ByteString.Lazy.Char8 as C
 import qualified Data.ByteString.Lazy as BB
 import Development.Shake
@@ -26,6 +27,7 @@ type Fastq = FilePath
 type Sam = FilePath
 data SeqType = NT | NR
 
+
 -- TODO: get some toy databases (not hg38)
 
 --block :: Config -> Fastq -> Fastq -> Action ()
@@ -41,40 +43,48 @@ block config input1 input2 = shake shakeOptions $ do
   --want ["rapsearch.tsv", "gsnap.tsv"] -- final result of build
   want ["NR.tax.R1", "NR.tax.R2", "NT.tax.R1", "NT.tax.R2"]
 
-  let r1_star = "Unmapped.out.mate1"
-  let r2_star = "Unmapped.out.mate2"
+  let r1_star = "Unmapped.out.mate1.fq"
+  let r2_star = "Unmapped.out.mate2.fq"
 
-  let r1_bowtie = "bowtie.unmapped.1"
-  let r2_bowtie = "bowtie.unmapped.2"
+  let r1_bowtie = "bowtie.1.unmapped"
+  let r2_bowtie = "bowtie.2.unmapped"
+
+  let r1_psf  = "R1.psf.fq"
+  let r2_psf  = "R2.psf.fq"
 
   pairRule "R1" r1_bowtie
 
   pairRule "R2" r2_bowtie
 
-  [r1_bowtie, r2_bowtie] &%> \[o1, _] -> do
+  [r1_bowtie, r2_bowtie, "bowtie.mapped"] &%> \[o1, _, log] -> do
     (r1, r2) <- need2 "R1.deduped" "R2.deduped"
-    cmd "bowtie2" "-1" r1 "-2" r2 "--very-sensitive-local" 
+    cmd Shell "bowtie2" "-1" r1 "-2" r2 "--very-sensitive-local" 
       "--un-conc" (dropExtension o1)
-      "-x" $ bowtieDB $ bowtie2 config
+      "-x" (bowtieDB $ bowtie2 config)
+      ">" log
 
   ["R1.lzw", "R2.lzw"] &%> \[out1, out2] -> do
     (src1, src2) <- needExt2 "deduped" out1 out2
     liftIO $ filterPair (not . lowComplex 0.45) src1 src2 out1 out2 
 
   ["R1.deduped", "R2.deduped"] &%> \[out1, out2] -> do
-    (r1, r2) <- needExt2 "psf" out1 out2
+    --(r1, r2) <- needExt2 "psf" out1 out2
+    (r1, r2) <- need2 r1_psf r2_psf
     runCdHitDup (cdhitdup config) (RP r1 r2) (RP out1 out2)
 
-  ["R1.psf", "R2.psf"] &%> \[o1, o2] -> do
+  [r1_psf, r2_psf] &%> \[o1, o2] -> do
     need [r1_star, r2_star]
     runPriceFilter (pricefilter config) (RP r1_star r2_star) (RP o1 o2)
 
   [r1_star, r2_star] &%> \[o1, _] -> do
     need [input1, input2]
-    cmd "STAR" "--readFilesIn" input1 input2 
+    () <- cmd "STAR" "--readFilesIn" input1 input2 
         "--genomeDir" (starDB $ star config) 
         "--runThreadN" (show $ threads config) 
-        "--outSAMtype SAM" "--outReadsUnmapped" $ dropExtension o1
+        "--outSAMtype SAM" "--outReadsUnmapped Fastx" 
+    -- need this business because Price only accepts files with .fq/.fastq extension.
+    () <- cmd "mv" (dropExtension r1_star) r1_star
+    cmd "mv" (dropExtension r2_star) r2_star
 
   where
     runCdHitDup :: CDHitOpts -> ReadPair -> ReadPair -> Action ()
@@ -91,10 +101,12 @@ block config input1 input2 = shake shakeOptions $ do
         "-op" o1 o2
         "-rnf" (show cp)
         "-rqf" (show hqp) (show hqm)
+
+
     runSTAR :: STAROpts -> ReadPair -> FilePath -> Action ()
     runSTAR STAROpts{starDB=db'} (RP r1 r2) out = cmd'
       where
-        cmd' = cmd "STAR" "--readFilesIn" r1 r2 "--genomeDir" db' "--runThreadN" (show $ threads config) "--outFileNamePrefix" (out -<.> "") "--outSAMtype" "SAM"
+        cmd' = cmd "STAR" "--readFilesIn" r1 r2 "--genomeDir" db' "--runThreadN" (show $ threads config) "--outFileNamePrefix" (out -<.> "") "--outSAMtype SAM"
 
     acc2tax :: SeqType -> FilePath -> FilePath -> Action ()
     acc2tax st fpout fpin = cmd "acc2tax" "--gi" "-i" fpin "-o" fpout "--database" db "--entries" ents type'
@@ -124,7 +136,7 @@ block config input1 input2 = shake shakeOptions $ do
        cmd "rapsearch -o" out "-d" (rapsearchDB $ rapsearch config) "-q" =<< need' fq
   
      "NT.m8" <.> s %> \out ->
-       cmd "blastn -m 8 -db" (ntDB $ ncbi config) "-o" out "-q" =<< need' fq 
+       cmd "blastn -outfmt 8 -db" (ntDB $ ncbi config) "-o" out "-q" =<< need' fq 
       -- paste 'cat's files "vertically"
       where paste src1 src2 out = cmd Shell "paste -d \t" src1 src2 ">" out
 
@@ -148,6 +160,11 @@ lowComplex n s = compScore < n  where
   ucSize       = length' uncompressed
   uncompressed = BB.unpack $ unSD $ seqdata s -- so need to unpack
   length' xs = foldr (\_ z -> z + 1) 0 xs
+
+fastq2fasta fq fa = do
+ fq' <- readSangerQ fq
+ let fas = map (\x -> Seq (seqid x) (seqdata x) Nothing) fq'
+ writeFasta fa fas
 
 filterPair f in1 in2 o1 o2 = do
   r1 <- readSangerQ in1
