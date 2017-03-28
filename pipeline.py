@@ -17,10 +17,23 @@ import sys
 from functools import partial
 import shutil
 import os
+from Bio import SeqIO
 # TODO: LZW!
 # TODO: Log commands as doing them
-# TODO: Remove log file at start if it exists.
-
+def lzw(sequence):
+  output = []
+  table = dict(dict((chr(i), i) for i in range(256)))
+  s = ''
+  for ch in sequence:
+    it = s + ch
+    if it in table:
+      s = it
+    else:
+      output.append(table[s])
+      table[it] = len(table)
+      s = ch
+  output.append(table[s])
+  return len(output)
 
 #############
 # Utilities #
@@ -79,7 +92,8 @@ def rapsearch(log, cfg, fq, out):
     sh.rapsearch(o=out, d=cfg.rapsearch.rapsearchDB, q=fq, _err=log, _out=log)
 
 def blastn(log, cfg, fq, out):
-    sh_.blastn(outfmt=8, db=cfg.ncbi.ntDB, q=fq, _err=log, _out=out)
+    print "attempting blast with %s %s" % (fq, out)
+    sh_.blastn(outfmt=6, db=cfg.ncbi.ntDB, query=fq, _err=log, _out=out)
 
 def krona(log, cfg, blast, out):
     sh.ktImportBlast(blast, o=out, _err=log, _out=log) # probably need config for kronadb!
@@ -102,8 +116,10 @@ def run(cfg, input1, input2, log=None):
   cd1 =       p( "cd.r1.fq" )
   cd2 =       p( "cd.r2.fq" )
 
-  bowtie1 =   p( "bowtie.r1.fq" )
-  bowtie2 =   p( "bowtie.r2.fq" )
+  _bowtie1 =   p( "bowtie.1.r1" )
+  _bowtie2 =   p( "bowtie.2.r1" )
+  bowtie1 =   p( "bowtie.r1.fa" )
+  bowtie2 =   p( "bowtie.r2.fa" )
   nr1     =   p( "rapsearch.r1.blast" )
   nr2     =   p( "rapsearch.r2.blast" )
 
@@ -132,8 +148,11 @@ def run(cfg, input1, input2, log=None):
   if need(cd1):
     cdhitdup(log, cfg, psf1, psf2, cd1, cd2)
 
-  if need(bowtie1):
+  if need(_bowtie1):
     bowtie_sensitive(log, cfg, cd1, cd2, bowtie1)
+  if need(bowtie1):
+    SeqIO.convert(_bowtie1, 'fastq', bowtie1, 'fasta')
+    SeqIO.convert(_bowtie2, 'fastq', bowtie2, 'fasta')
 
   if need(nt1):
     blastn(log, cfg, bowtie1, nt1)
@@ -156,6 +175,10 @@ def main():
   cfg = Config(cfg)
   cfg.outdir = args['-o'] or "."
   if args['--log']:
+    _log = Path(args['--log'])
+    if _log.exists():
+      print "Removing old log file %s" % _log
+      _log.remove()
     log = open(args['--log'], 'a')
   else:
     log = sys.stdout
