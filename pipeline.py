@@ -90,6 +90,7 @@ def bowtie_sensitive(log, cfg, r1, r2, o1):
     sh.bowtie2(**args)
 
 def rapsearch(log, cfg, fq, out):
+    out = out.splitext()[0] # rapsearch adds an m8 extension
     sh.rapsearch(o=out, d=cfg.rapsearch.rapsearchDB, q=fq, _err=log, _out=log)
 
 def blastn(log, cfg, fq, out):
@@ -100,7 +101,8 @@ def blastn(log, cfg, fq, out):
 def krona(log, cfg, blast, out):
     sh.ktImportBLAST(blast, o=out, _err=log, _out=log) # probably need config for kronadb!
 
-
+def blastx(log, cfg, fq, out):
+    sh.blastn(outfmt=6, db=cfg.ncbi.nrDB, query=fq, _err=log, _out=out, _long_prefix='-')
 ############
 # Pipeline #
 ############
@@ -122,8 +124,8 @@ def run(cfg, input1, input2, log=None):
   _bowtie2 =   p( "bowtie.2.r1" )
   bowtie1 =   p( "bowtie.r1.fa" )
   bowtie2 =   p( "bowtie.r2.fa" )
-  nr1     =   p( "rapsearch.r1.blast" ) # actual output adds .m8 extension
-  nr2     =   p( "rapsearch.r2.blast" ) # actual output adds .m8 extension
+  nr1     =   p( "rapsearch.r1.blast.m8" ) # rapsearch automatically adds .m8 extension
+  nr2     =   p( "rapsearch.r2.blast.m8" ) # rapsearch automatically adds .m8 extension
 
   nt1 =       p( "r1.blast" )
   nt2 =       p( "r2.blast" )
@@ -161,14 +163,16 @@ def run(cfg, input1, input2, log=None):
     blastn(log, cfg, bowtie2, nt2)
 
   if need(nr1):
-    rapsearch(log, cfg, bowtie1, nr1)
-    rapsearch(log, cfg, bowtie2, nr2)
+    #rapsearch(log, cfg, bowtie1, nr1)
+    #rapsearch(log, cfg, bowtie2, nr2)
+    blastx(log, cfg, bowtie1, nr1)
+    blastx(log, cfg, bowtie2, nr2)
 
   if need(kronaNT1):
     krona(log, cfg, nt1, kronaNT1)
     krona(log, cfg, nt2, kronaNT2)
-    krona(log, cfg, nr1 + '.m8', kronaNR1)
-    krona(log, cfg, nr2 + '.m8', kronaNR2)
+    krona(log, cfg, nr1, kronaNR1)
+    krona(log, cfg, nr2, kronaNR2)
 
 def main():
   args = docopt(__doc__, version='Version 1.0')
