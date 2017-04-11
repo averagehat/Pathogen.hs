@@ -1,0 +1,6 @@
+#!/bin/bash
+f1=$1
+f2=$2
+shift 2
+cmd="abyss-pe in='${f1} ${f2}' $@"
+eval $cmd

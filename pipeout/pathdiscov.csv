@@ -1,0 +1,10 @@
+Tool,Purpose
+STAR,host mapping
+PriceSeqFilter,read filtering
+cd-hit-dup,read compression
+bowtie2,host mapping
+BLAST,nucleotide alignment
+Rapsearch2,protein alignment
+ABySS,de novo assembly
+Krona,visualization
+python,read filtering etc.

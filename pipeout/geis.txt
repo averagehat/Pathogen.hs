@@ -1,0 +1,29 @@
+Current Features
+ * fully automatic and configurable
+ * simple, portable install process
+ * comprehensive documentation
+ * Complexity filtering based on LZW algorithm
+ * multi-stage host mapping
+ * customizable hosts
+ * read compression
+ * quality filtering
+ * read filtering based on index
+ * De Novo Assembly
+ * nucleotide alignment with BLAST 
+ * protein alignment with BLAST
+ * taxonomic annotation
+ * interactive, taxonomy-oriented visualization
+ * suspcicious BLAST results flagged 
+ * alignment, annotation and visualization for both reads and assembled contigs.
+
+Planned Features
+ * contamination detection based on water control sample
+ * taxonomy-oriented visualization inclusive of contamination possiblity metric and suspicious BLAST results
+ * summary tables
+ * abundance estimates based on e-score, read count and other metrics for both contigs and individual reads.
+ * comprehensive tests using simulated and real-world data
+
+
+Lofreq -- in progress
+
+Include stuff that's in progress.

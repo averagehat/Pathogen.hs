@@ -18,6 +18,7 @@ from functools import partial
 import shutil
 import os
 from Bio import SeqIO
+import subprocess
 # TODO: LZW!
 # TODO: Log commands as doing them
 def lzw(sequence):
@@ -101,8 +102,57 @@ def blastn(log, cfg, fq, out):
 def krona(log, cfg, blast, out):
     sh.ktImportBLAST(blast, o=out, _err=log, _out=log) # probably need config for kronadb!
 
+
 def blastx(log, cfg, fq, out):
-    sh.blastn(outfmt=6, db=cfg.ncbi.nrDB, query=fq, _err=log, _out=out, _long_prefix='-')
+    sh.blastx(outfmt=6, db=cfg.ncbi.nrDB, query=fq, _err=log, _out=out, _long_prefix='-')
+
+def abyss(log, cfg, r1, r2, out):
+    print 'trying :('
+    dir = out.dirname()
+    f1 = dir.relpathto(r1)
+    f2 = dir.relpathto(r2)
+    prefix=out.basename().split('-')[0]
+    print f1, f2, 'name=%s' % prefix, 'k=%s' % 25
+    sh.run_abyss(f1, f2, 'name=%s' % prefix, 'k=%s' % 25, C=dir, _err=log, _out=log)
+
+def lzw_filter(log, cfg, r1, r2, out1, out2):
+    un_comp_len = len(str(x.seq))
+    comp_len = sum(imap(len, sh.gzip(f=True, _in=str(x.seq))))
+
+def filter_pair_fastq(func, r1, r2, o1, o2):
+    fwd = SeqIO.parse(r1, 'fastq')
+    rev = SeqIO.parse(r2, 'fastq')
+    filtered = ((x, y) for (x, y) in izip(fwd, rev)
+                if func(x) and func(y))
+    with open(o1, 'w') as f1, open(o2, 'w') as f2:  # because SeqIO is slow for writing single records
+        for (x, y) in izip(fwd, rev):
+            if func(x) and func(y):
+                '@
+                f1.write(x.format(form))
+                f2.write(y.format(form))
+
+
+
+    #comp_len = sh.wc(sh.gzip(f=True, _in=str(x.seq)), c=True)
+
+    #sh.run_abyss(r1, r2, 'name=%s' % prefix, 'k=%s' % 25, _err=log, _out=log)
+#    args = ["in=%s %s" % (r1, r2), 'name=%s' % prefix, 'k=%s' % 25]
+#    subprocess.call('abyss-pe ' + ' '.join(args))
+    #subprocess.call('abyss-pe', ' '.join(args))
+#    print ['abyss-pe'] + args
+    #subprocess.call(['abyss-pe'] + args) #, stdout=log, stderr=log, shell=True)
+#    ex = "abyss-pe in=%s %s" % (r1, r2) +  ' name=%s ' % prefix + ' k=%s' % 25
+#    subprocess.call(ex, stdout=log, stderr=log, shell=True)
+
+#    sh.abyss_pe('in=\'%s %s\'' % (r1, r2), 'name=%s' % prefix, 'k=%s' % 25, # '-n'  dryrun
+#                _err=log, _out=log)
+#    sh.abyss_pe("in='%s %s'" % (r1, r2), name=prefix, k=25, # '-n'  dryrun
+#                _err=log, _out=log, _long_prefix='', _short_prefix='')
+
+#    abyss-pe k=25 name=test     in='test-data/reads1.fastq test-data/reads2.fastq'
+
+
+
 ############
 # Pipeline #
 ############
@@ -122,17 +172,25 @@ def run(cfg, input1, input2, log=None):
 
   _bowtie1 =   p( "bowtie.1.r1" )
   _bowtie2 =   p( "bowtie.2.r1" )
-  bowtie1 =   p( "bowtie.r1.fa" )
-  bowtie2 =   p( "bowtie.r2.fa" )
-  nr1     =   p( "rapsearch.r1.blast.m8" ) # rapsearch automatically adds .m8 extension
-  nr2     =   p( "rapsearch.r2.blast.m8" ) # rapsearch automatically adds .m8 extension
 
-  nt1 =       p( "r1.blast" )
-  nt2 =       p( "r2.blast" )
-  kronaNT1  = p( "r1.NT.html" )
-  kronaNT2  = p( "r2.NT.html" )
-  kronaNR1  = p( "r1.NR.html" )
-  kronaNR2  = p( "r2.NR.html" )
+  contigs   = p("abyss-contigs.fa")
+
+  nr = p('contigs.nr.tsv')
+  nt = p('contigs.nt.tsv')
+  kronaNT = p('contigs.nt.html')
+  kronaNR = p('contigs.nr.html')
+
+#  bowtie1 =   p( "bowtie.r1.fa" )
+#  bowtie2 =   p( "bowtie.r2.fa" )
+#  nr1     =   p( "rapsearch.r1.blast.m8" ) # rapsearch automatically adds .m8 extension
+#  nr2     =   p( "rapsearch.r2.blast.m8" ) # rapsearch automatically adds .m8 extension
+#
+#  nt1 =       p( "r1.blast" )
+#  nt2 =       p( "r2.blast" )
+#  kronaNT1  = p( "r1.NT.html" )
+#  kronaNT2  = p( "r2.NT.html" )
+#  kronaNR1  = p( "r1.NR.html" )
+#  kronaNR2  = p( "r2.NR.html" )
 
   if not log:
     log = sys.stdout
@@ -153,26 +211,38 @@ def run(cfg, input1, input2, log=None):
     cdhitdup(log, cfg, psf1, psf2, cd1, cd2)
 
   if need(_bowtie1):
-    bowtie_sensitive(log, cfg, cd1, cd2, bowtie1)
-  if need(bowtie1):
-    SeqIO.convert(_bowtie1, 'fastq', bowtie1, 'fasta')
-    SeqIO.convert(_bowtie2, 'fastq', bowtie2, 'fasta')
+    bowtie_sensitive(log, cfg, cd1, cd2, _bowtie1)
 
-  if need(nt1):
-    blastn(log, cfg, bowtie1, nt1)
-    blastn(log, cfg, bowtie2, nt2)
+  if need(contigs):
+    abyss(log, cfg, _bowtie1, _bowtie2, contigs)
+  if need(nt):
+    blastn(log, cfg, contigs, nt)
+  if need(nr):
+    blastx(log, cfg, contigs, nr)
+  if need(kronaNT):
+    krona(log, cfg, nt, kronaNT)
+  if need(kronaNR):
+    krona(log, cfg, nr, kronaNR)
 
-  if need(nr1):
-    #rapsearch(log, cfg, bowtie1, nr1)
-    #rapsearch(log, cfg, bowtie2, nr2)
-    blastx(log, cfg, bowtie1, nr1)
-    blastx(log, cfg, bowtie2, nr2)
-
-  if need(kronaNT1):
-    krona(log, cfg, nt1, kronaNT1)
-    krona(log, cfg, nt2, kronaNT2)
-    krona(log, cfg, nr1, kronaNR1)
-    krona(log, cfg, nr2, kronaNR2)
+#  if need(bowtie1):
+#    SeqIO.convert(_bowtie1, 'fastq', bowtie1, 'fasta')
+#    SeqIO.convert(_bowtie2, 'fastq', bowtie2, 'fasta')
+#
+#  if need(nt1):
+#    blastn(log, cfg, bowtie1, nt1)
+#    blastn(log, cfg, bowtie2, nt2)
+#
+#  if need(nr1):
+#    #rapsearch(log, cfg, bowtie1, nr1)
+#    #rapsearch(log, cfg, bowtie2, nr2)
+#    blastx(log, cfg, bowtie1, nr1)
+#    blastx(log, cfg, bowtie2, nr2)
+#
+#  if need(kronaNT1):
+#    krona(log, cfg, nt1, kronaNT1)
+#    krona(log, cfg, nt2, kronaNT2)
+#    krona(log, cfg, nr1, kronaNR1)
+#    krona(log, cfg, nr2, kronaNR2)
 
 def main():
   args = docopt(__doc__, version='Version 1.0')
