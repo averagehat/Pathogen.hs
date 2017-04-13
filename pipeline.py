@@ -7,7 +7,7 @@ Options:
     --log <log>
 '''
 import sh
-import itertools
+from itertools import imap, izip, tee, chain
 from toolz.dicttoolz import keymap,valfilter,keyfilter
 from docopt import docopt
 from path import Path
@@ -18,9 +18,11 @@ from functools import partial
 import shutil
 import os
 from Bio import SeqIO
-import subprocess
-# TODO: LZW!
+from operator import itemgetter as get
 # TODO: Log commands as doing them
+# TODO: BLAST Contig results with mapped reads to get abundance:
+#  - Does abyss record number of reads into contig? # no, it's just length and "kmer coverage"
+#  - could duplicate contig blast entry for each read that maps to it and pass to krona
 def lzw(sequence):
 # https://github.com/betegonm/gen/blob/64aef21cfeefbf27b1e2bd6587c555d4df4f6913/gen.py#L294
   output = []
@@ -54,7 +56,7 @@ class Sh_(object):
             bools = valfilter(lambda x: type(x) is bool, kwargs)
             vargs = keymap("-{}".format, keyfilter(lambda x: x not in ['_err', '_out'], valfilter(lambda x: not type(x) is bool, kwargs)))
             #bools.update(vargs)
-            fixedargs = itertools.chain(vargs.items())
+            fixedargs = chain(vargs.items())
             getattr(sh, attr)(*(list(args) + list(fixedargs)), **bools)
         return command
 sh_ = Sh_()
@@ -107,7 +109,6 @@ def blastx(log, cfg, fq, out):
     sh.blastx(outfmt=6, db=cfg.ncbi.nrDB, query=fq, _err=log, _out=out, _long_prefix='-')
 
 def abyss(log, cfg, r1, r2, out):
-    print 'trying :('
     dir = out.dirname()
     f1 = dir.relpathto(r1)
     f2 = dir.relpathto(r2)
@@ -115,21 +116,39 @@ def abyss(log, cfg, r1, r2, out):
     print f1, f2, 'name=%s' % prefix, 'k=%s' % 25
     sh.run_abyss(f1, f2, 'name=%s' % prefix, 'k=%s' % 25, C=dir, _err=log, _out=log)
 
-def lzw_filter(log, cfg, r1, r2, out1, out2):
+
+#def lzw_filter(log, cfg, r1, r2, out1, out2):
+def lzw_filter_single(min_complexity, x):
     un_comp_len = len(str(x.seq))
     comp_len = sum(imap(len, sh.gzip(f=True, _in=str(x.seq))))
+    complexity =  comp_len / float(un_comp_len)
+    return complexity >= min_complexity
 
-def filter_pair_fastq(func, r1, r2, o1, o2):
-    fwd = SeqIO.parse(r1, 'fastq')
-    rev = SeqIO.parse(r2, 'fastq')
+def unzip(seq):
+    t1, t2 = tee(seq)
+    return imap(get(0), t1), imap(get(1), t2)
+
+def filter_pair(func, r1, r2, o1, o2, format):
+    fwd = SeqIO.parse(r1, format)
+    rev = SeqIO.parse(r2, format)
     filtered = ((x, y) for (x, y) in izip(fwd, rev)
                 if func(x) and func(y))
-    with open(o1, 'w') as f1, open(o2, 'w') as f2:  # because SeqIO is slow for writing single records
-        for (x, y) in izip(fwd, rev):
-            if func(x) and func(y):
-                '@
-                f1.write(x.format(form))
-                f2.write(y.format(form))
+    res1, res2 = unzip(filtered)
+    with open(o1, 'w') as f1:
+        with open(o2, 'w') as f2:
+            SeqIO.write(res1, f1, format)
+            SeqIO.write(res2, f2, format)
+
+def lzw_filter_fastq(log, cfg, r1, r2, out1, out2):
+    lzw_func = partial(lzw_filter_single, cfg.lzwfilter.maxCompressionScore)
+    filter_pair(lzw_func, r1, r2, out1, out2, 'fastq')
+
+#                # because SeqIO is slow for writing single records
+#        for (x, y) in izip(fwd, rev):
+#            if func(x) and func(y):
+#                '@
+#                f1.write(x.format(form))
+#                f2.write(y.format(form))
 
 
 
@@ -169,6 +188,9 @@ def run(cfg, input1, input2, log=None):
 
   cd1 =       p( "cd.r1.fq" )
   cd2 =       p( "cd.r2.fq" )
+
+  lzw1 = "lzw.r1"
+  lzw2 = "lzw.r2"
 
   _bowtie1 =   p( "bowtie.1.r1" )
   _bowtie2 =   p( "bowtie.2.r1" )
@@ -210,8 +232,11 @@ def run(cfg, input1, input2, log=None):
   if need(cd1):
     cdhitdup(log, cfg, psf1, psf2, cd1, cd2)
 
+  if need(lzw1):
+    lzw_filter_fastq(log, cfg, cd1, cd2, lzw1, lzw2)
+
   if need(_bowtie1):
-    bowtie_sensitive(log, cfg, cd1, cd2, _bowtie1)
+    bowtie_sensitive(log, cfg, lzw1, lzw2, _bowtie1)
 
   if need(contigs):
     abyss(log, cfg, _bowtie1, _bowtie2, contigs)
@@ -266,3 +291,4 @@ def main():
   sys.exit(0)
 
 if __name__ == '__main__': main()
+
