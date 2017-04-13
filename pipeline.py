@@ -7,7 +7,7 @@ Options:
     --log <log>
 '''
 import sh
-from itertools import imap, izip, tee, chain
+from itertools import imap, izip, tee, chain, groupby
 from toolz.dicttoolz import keymap,valfilter,keyfilter
 from docopt import docopt
 from path import Path
@@ -19,6 +19,9 @@ import shutil
 import os
 from Bio import SeqIO
 from operator import itemgetter as get
+from collections import Counter
+#import numpy as np
+#import matplotlib.pyplot as plt
 # TODO: Log commands as doing them
 # TODO: BLAST Contig results with mapped reads to get abundance:
 #  - Does abyss record number of reads into contig? # no, it's just length and "kmer coverage"
@@ -143,6 +146,26 @@ def lzw_filter_fastq(log, cfg, r1, r2, out1, out2):
     lzw_func = partial(lzw_filter_single, cfg.lzwfilter.maxCompressionScore)
     filter_pair(lzw_func, r1, r2, out1, out2, 'fastq')
 
+def sum_sam_by_ref(log, cfg, sam):
+    res = sh.samtools.view(sam, F=260)
+    refs = imap(lambda x: x.split('\t')[2], res)
+    return Counter(refs)
+
+def dup_blast(log, sam, blst, out):
+    counter = sum_sam_by_ref(None, None, sam)
+    log.write("Skipped Contigs:\n======\n")
+    with open(out, 'w') as f:
+        with open(blst, 'r') as blast:
+            for k,v in groupby(blast, lambda x: x.split('\t')[0]):
+                if k not in counter:
+                    contig_length = next(v).split('\t')[3]
+                    log.write("Contig %s of length %s had no mapped reads.\n" % (k, contig_length))
+                else:
+                    f.writelines(list(v) * counter[k])
+    log.write("======\n")
+
+
+
 #                # because SeqIO is slow for writing single records
 #        for (x, y) in izip(fwd, rev):
 #            if func(x) and func(y):
@@ -240,8 +263,16 @@ def run(cfg, input1, input2, log=None):
 
   if need(contigs):
     abyss(log, cfg, _bowtie1, _bowtie2, contigs)
+    contigs_index = 'contigs-b2'
+    contigs_sam = 'contigs.sam'
+    sh.bowtie2_build(contigs, contigs_index)
+    sh.bowtie2(**{'1' : _bowtie1, '2' : _bowtie2, 'x' : contigs_index,
+                  '_err' : log, '_out' : contigs_sam})
+
   if need(nt):
     blastn(log, cfg, contigs, nt)
+    # TODO: fix below
+    dup_blast(log, sam, blst, out)
   if need(nr):
     blastx(log, cfg, contigs, nr)
   if need(kronaNT):
