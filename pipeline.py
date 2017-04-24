@@ -7,8 +7,9 @@ Options:
     --log <log>
 '''
 import sh
-from itertools import imap, izip, tee, chain, groupby
-from toolz.dicttoolz import keymap,valfilter,keyfilter
+from itertools import imap, izip, tee, chain, groupby, ifilter, starmap
+from toolz.dicttoolz import keymap,valfilter,keyfilter,merge
+from toolz.itertoolz import mapcat
 from docopt import docopt
 from path import Path
 import types
@@ -20,6 +21,9 @@ import os
 from Bio import SeqIO
 from operator import itemgetter as get
 from collections import Counter
+import csv
+from ete2 import NCBITaxa
+import plumbum
 #import numpy as np
 #import matplotlib.pyplot as plt
 # TODO: Log commands as doing them
@@ -102,14 +106,14 @@ def rapsearch(log, cfg, fq, out):
 def blastn(log, cfg, fq, out):
     print "attempting blast with %s %s" % (fq, out)
     #sh_.blastn(outfmt=6, db=cfg.ncbi.ntDB, query=fq, _err=log, _out=out)
-    sh.blastn(outfmt=6, db=cfg.ncbi.ntDB, query=fq, _err=log, _out=out, _long_prefix='-')
+    sh.blastn('-max_target_seqs', '1', outfmt=6, db=cfg.ncbi.ntDB, query=fq, _err=log, _out=out, _long_prefix='-')
 
 def krona(log, cfg, blast, out):
     sh.ktImportBLAST(blast, o=out, _err=log, _out=log) # probably need config for kronadb!
 
 
 def blastx(log, cfg, fq, out):
-    sh.blastx(outfmt=6, db=cfg.ncbi.nrDB, query=fq, _err=log, _out=out, _long_prefix='-')
+    sh.blastx('-max_target_seqs', '1', outfmt=6, db=cfg.ncbi.nrDB, query=fq, _err=log, _out=out, _long_prefix='-')
 
 def abyss(log, cfg, r1, r2, out):
     dir = out.dirname()
@@ -194,6 +198,69 @@ def dup_blast(log, sam, blst, out):
 #    abyss-pe k=25 name=test     in='test-data/reads1.fastq test-data/reads2.fastq'
 
 
+# taxid = 1056490
+
+def blastdbcmd(**opts):
+    cmd_opts = keymap('-{}'.format, opts).items()
+    process = plumbum.local['blastdbcmd'][cmd_opts]
+    print process
+    for line in process.popen().iter_lines(retcode=None):
+        yield line[0]
+
+def get_taxid(db, seqids): # (Path, str) -> dict[str,str]
+   #res = sh.blastdbcmd(db=db, outfmt="'%g %T'", entry="'%s'" % seqid, _long_prefix='-')
+   max_ids = 1000/80
+   if len(seqids) > max_ids:
+      xs = [seqids[i*max_ids:(i+1)*max_ids] \
+         for i in range(len(seqids) / max_ids)]
+      xs.extend(seqids[sum(map(len, xs))-1:])
+   else: xs = [seqids]
+#   xs = chain(*xs)
+#   print map(len, xs)
+   print seqids
+   print xs
+   res = mapcat(lambda x: blastdbcmd(db=db, outfmt="'%g %T'", entry="'%s'" % ','.join(x)), xs)
+   #res = blastdbcmd(db=db, outfmt="'%g %T'", entry="'%s'" % ','.join(xs))
+   #print res
+   #print res
+   res = ifilter(bool, res)
+   res = imap(lambda s: s.strip("'"), res)
+   return dict(imap(unicode.split, res))
+
+def taxonomy(ncbi, taxid):
+    lineage = ncbi.get_lineage(taxid)
+    ranks = ncbi.get_rank(lineage)
+    names = ncbi.get_taxid_translator(lineage)
+    def make_d(lineage, ranks, names):
+        for lin in lineage:
+            if ranks[lin] == 'no rank':
+                continue
+            yield (ranks[lin], names[lin])
+    return dict(make_d(lineage, ranks, names))
+def dictmap(f, d): return starmap(f, d.items())
+def blast2summary_dict(db, blastpath): # (Path, Path) -> list[dict]
+
+  """Reading in a blast output file, lookup all seqids to get taxids with a single blastdbcmd.
+  Then, lookup the taxonomy using ETE2 via the taxid, and add that info to the blast info."""
+  rows = csv.DictReader(open(blastpath), delimiter='\t',fieldnames=['qseqid', 'sseqid','pid', 'alnlen','gapopen','qstart','qend','sstart','send','evalue','bitscore'])
+  rows = list(rows)
+  seqids = map(get('sseqid'), rows)
+  taxids = get_taxid(db, seqids)
+  gis = (s.split('|')[1] for s in seqids)
+  matches = dict((taxids[gi], row) for gi, row in zip(gis,rows) if gi in taxids)
+  ncbi = NCBITaxa() # downloads database and creates SQLite database if needed
+  return dictmap(lambda tid,row: merge(row, taxonomy(ncbi, tid)), matches)
+
+def blast2summary(db, blastpath, outpath): # (Path,Path,Path) -> None
+    with_taxonomies = list(blast2summary_dict(db, blastpath))
+    head = with_taxonomies[0]
+    print with_taxonomies
+    with open(outpath, 'w') as out:
+       writer = csv.DictWriter(out, head.keys(), delimiter='\t')
+       #writer = csv.DictWriter(out, fieldnames=head.keys(), delimiter='\t')
+       writer.writeheader()
+       for row in with_taxonomies:
+         writer.writerow(row)
 
 ############
 # Pipeline #
@@ -219,12 +286,20 @@ def run(cfg, input1, input2, log=None):
   _bowtie2 =   p( "bowtie.2.r1" )
 
   contigs   = p("abyss-contigs.fa")
+  contigs_sam = 'contigs.sam'
 
-  nr = p('contigs.nr.tsv')
-  nt = p('contigs.nt.tsv')
-  kronaNT = p('contigs.nt.html')
-  kronaNR = p('contigs.nr.html')
+  contig_nr = p('contigs.nr.blast')
+  contig_nt = p('contigs.nt.blast')
 
+  dup_nt = p('contigs.nt.blast.dup')
+  dup_nr = p('conrigs.nr.blast.dup')
+  contig_kronaNT = p('contigs.nt.html')
+  contig_kronaNR = p('contigs.nr.html')
+
+  contig_nt_tsv = p("contigs.nt.tsv")
+  conrig_nr_tsv = p("conrigs.nr.tsv")
+  nt_tsv = p('nt.tsv')
+  nr_tsv = p('nr.tsv')
 #  bowtie1 =   p( "bowtie.r1.fa" )
 #  bowtie2 =   p( "bowtie.r2.fa" )
 #  nr1     =   p( "rapsearch.r1.blast.m8" ) # rapsearch automatically adds .m8 extension
@@ -264,21 +339,23 @@ def run(cfg, input1, input2, log=None):
   if need(contigs):
     abyss(log, cfg, _bowtie1, _bowtie2, contigs)
     contigs_index = 'contigs-b2'
-    contigs_sam = 'contigs.sam'
     sh.bowtie2_build(contigs, contigs_index)
     sh.bowtie2(**{'1' : _bowtie1, '2' : _bowtie2, 'x' : contigs_index,
                   '_err' : log, '_out' : contigs_sam})
 
-  if need(nt):
-    blastn(log, cfg, contigs, nt)
+  if need(contig_nt):
+    blastn(log, cfg, contigs, contig_nt)
     # TODO: fix below
-    dup_blast(log, sam, blst, out)
-  if need(nr):
-    blastx(log, cfg, contigs, nr)
-  if need(kronaNT):
-    krona(log, cfg, nt, kronaNT)
-  if need(kronaNR):
-    krona(log, cfg, nr, kronaNR)
+    dup_blast(log, contigs_sam, contig_nt, dup_nt)
+  if need(contig_nr):
+    blastx(log, cfg, contigs, contig_nr)
+    dup_blast(log, contigs_sam, contig_nr, dup_nr)
+  if need(contig_kronaNT):
+    krona(log, cfg, contig_nt, contig_kronaNT)
+  if need(contig_kronaNR):
+    krona(log, cfg, contig_nr, contig_kronaNR)
+  if need(contig_nt_tsv):
+    blast2summary(cfg.ncbi.ntDB, contig_nt, contig_nt_tsv)
 
 #  if need(bowtie1):
 #    SeqIO.convert(_bowtie1, 'fastq', bowtie1, 'fasta')
@@ -314,12 +391,15 @@ def main():
     log = open(args['--log'], 'a')
   else:
     log = sys.stdout
-  try:
-    run(cfg, args['<r1>'], args['<r2>'], log)
-  except Exception as e:
-    log.write(str(e))
+  run(cfg, args['<r1>'], args['<r2>'], log)
+#  try:
+#    run(cfg, args['<r1>'], args['<r2>'], log)
+#  except Exception as e:
+#    log.write(str(e))
   if args['--log']: log.close()
   sys.exit(0)
 
 if __name__ == '__main__': main()
+
+
 
